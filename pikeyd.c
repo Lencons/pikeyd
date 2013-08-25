@@ -1,10 +1,11 @@
 /**** pikeyd.c *****************************/
-/* M. Moller   2013-01-16                  */
 /*   Universal RPi GPIO keyboard daemon    */
+/*                                         */
+/* M. Moller   2013-01-16                  */
+/* D. Lennox   2013-08-25                  */
 /*******************************************/
 
 /*
-   Copyright (C) 2013 Michael Moller.
    This file is part of the Universal Raspberry Pi GPIO keyboard daemon.
 
    This is free software; you can redistribute it and/or
@@ -62,8 +63,15 @@ int main(int argc, char *argv[])
     daemonize("/tmp", "/tmp/pikeyd.pid");
   }
 
-  init_iic();
-  init_config();
+  switch (init_config()) {
+    case 0:
+      return(-1);
+    case 1:
+      break;
+    case 2:
+      init_iic();
+  }
+
 
   //test_config(); exit(0);
 

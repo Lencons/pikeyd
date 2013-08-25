@@ -1,10 +1,11 @@
 /**** config.c *****************************/
-/* M. Moller   2013-01-16                  */
 /*   Universal RPi GPIO keyboard daemon    */
+/*                                         */
+/* M. Moller   2013-01-16                  */
+/* D. Lennox   2013-08-25                  */
 /*******************************************/
 
 /*
-   Copyright (C) 2013 Michael Moller.
    This file is part of the Universal Raspberry Pi GPIO keyboard daemon.
 
    This is free software; you can redistribute it and/or
@@ -25,7 +26,12 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 #include "config.h"
 #include "iic.h"
 #include "joy_RPi.h"
@@ -57,6 +63,10 @@ typedef struct{
   gpio_key_s *key[8];
 }xio_dev_s;
 
+static int load_buffer(int fd);
+static char *next_token(int fd);
+static int next_command(int fd, char ***cmd);
+static void parse_err(char *str);
 static int find_key(const char *name);
 static void add_event(gpio_key_s **ev, int gpio, int key, int xio);
 static gpio_key_s *get_event(gpio_key_s *ev, int idx);
@@ -73,117 +83,176 @@ static int xio_count = 0;
 static int SP;
 static keyinfo_s KI;
 
+static char *parse_buf = (char *) 0;
+static char *parse_bufptr = (char *) 0;
+static char parse_filename[80];
+static int parse_lnno = 0;
+
 int init_config(void)
 {
-  int i,j,k,n;
-  FILE *fp;
-  char ln[MAX_LN];
-  int lnno = 0;
-  char name[32], xname[32];
-  char conffile[80];
-  int gpio,caddr,regno;
+  int i, j, k, n;
+  int fd;
+  char *end_ptr;
+  char **cmd;
+  int tok_cnt;
+  char xname[32];
+  int gpio, caddr, regno;
+  char err_str[80];
 
   for(i=0;i<NUM_GPIO;i++){
     gpio_key[i] = NULL;
   }
 
-  /* search for the conf file in ~/.pikeyd.conf and /etc/pikeyd.conf */
-  sprintf(conffile, "%s/.pikeyd.conf", getenv("HOME"));
-  fp = fopen(conffile, "r");
-  if(!fp){
-    fp = fopen("/etc/pikeyd.conf", "r");
-    if(!fp){
-      perror(conffile);
-      perror("/etc/pikeyd.conf");
-    }
-    sprintf(conffile, "/etc/pikeyd.conf");
-  }
-  if(fp){
-    printf("Config file is %s\n", conffile);
-  }
-
-  while(fp && !feof(fp)){
-    if(fgets(ln, MAX_LN, fp)){
-      lnno++;
-      if(strlen(ln) > 1){
-	if(ln[0]=='#')continue;
-	n=sscanf(ln, "%s %d", name, &gpio);
-	if(n>1){
-	  k = find_key(name);
-	  if(k){
-	    //printf("%d %04x:[%s] = %d/%d (%d)\n",lnno, k,name, gpio, n, key_names[k].code);
-	    if(key_names[k].code < 0x300){
-	      SP=0;
-	      add_event(&gpio_key[gpio], gpio, key_names[k].code, -1);
-	    }
-	  }
-	  /* expander declarations start with "XIO" */
-	  else if(strstr(ln, "XIO") == ln){
-	    n=sscanf(ln, "%s %d/%i/%s", name, &gpio, &caddr, xname);
-	    if(n > 2){
-	      //printf("%d XIO entry: %s %d %02x %s\n", lnno, name, gpio, caddr, xname);
-	      strncpy(xio_dev[xio_count].name, name, 20);
-	      xio_dev[xio_count].addr = caddr;
-	      xio_dev[xio_count].last_key = NULL;
-	      xio_dev[xio_count].lastvalue = 0xff;
-	      for(i=0;i<8;i++){
-		xio_dev[xio_count].key[i] = NULL;
-	      }
-	      if( !strncmp(xname, "MCP23008", 8) ){
-		xio_dev[xio_count].type = IO_MCP23008;
-		xio_dev[xio_count].regno = 0x09;
-	      }
-	      else if( !strncmp(xname, "MCP23017A", 9) ){
-		xio_dev[xio_count].type = IO_MCP23017A;
-		xio_dev[xio_count].regno = 0x09;
-	      }
-	      else if( !strncmp(xname, "MCP23017B", 9) ){
-		xio_dev[xio_count].type = IO_MCP23017B;
-		xio_dev[xio_count].regno = 0x19;
-	      }
-	      else{
-		xio_dev[xio_count].type = IO_UNK;
-		xio_dev[xio_count].regno = 0;
-	      }
-
-	      add_event(&gpio_key[gpio], gpio, 0, xio_count);
-	      xio_count++;
-	      xio_count %= 16;
-	    }
-	  }
-	  else{
-	    printf("Line %d. Unknown entry (%s)\n", lnno, ln);
-	  }
-	}
-	else if(n>0){ /* I/O expander pin-entries */
-	  n=sscanf(ln, "%s %[^:]:%i", name, xname, &gpio);
-	  if(n>2){
-	    //printf("%d XIO event %s at (%s):%d\n", lnno, name, xname, gpio);
-	    if( (n = find_xio(xname)) >= 0 ){
-	      k = find_key(name);
-	      if(k){
-		add_event(&xio_dev[n].key[gpio], gpio, key_names[k].code, -1);
-		//printf(" Added event %s on %s:%d\n", name, xname, gpio);
-	      }
-	    }
-	    else{
-	      printf("Line %d. No such expander: %s\n", lnno, xname);
-	    }
-	  }
-	  else{
-	    printf("Line %d. Bad entry (%s)\n", lnno, ln);
-	  }
-	}
-	else{
-	  printf("Line %d. Too few arguments (%s)\n", lnno, ln);
-	}
+  /* search for conf file: ./pikeyd.conf, ~/.pikeyd.conf, /etc/pikeyd.conf */
+  strcpy(parse_filename, "./pikeyd.conf");
+  fd = open(parse_filename, O_RDONLY);
+  if (fd==-1) {
+    sprintf(parse_filename, "%s/.pikeyd.conf", getenv("HOME"));
+    fd = open(parse_filename, O_RDONLY);
+    if (fd == -1) {
+      strcpy(parse_filename, "/etc/pikeyd.conf");
+      fd = open(parse_filename, O_RDONLY);
+      if (fd == -1) {
+        perror(parse_filename);
+        perror("/etc/pikeyd.conf");
+        return 0;
       }
     }
   }
+  printf("Config file is %s\n", parse_filename);
+  load_buffer(fd);
 
-  if(fp){
-    fclose(fp);
+  /*
+  while ((tok_cnt = next_command(fd, &cmd)) >= 0) {
+    int i;
+    if (tok_cnt) {
+      for(i=0;i<tok_cnt;i++) printf("%s[%s]",(i?",":"tok:"),(char *) cmd[i]);
+      printf("\n");
+    }
   }
+  return(0);
+  */
+
+  while ((tok_cnt = next_command(fd, &cmd)) >= 0) {
+
+    /* skip blank lines */
+    if (!tok_cnt) {
+      continue;
+    }
+
+    /* KEY declaration */
+    if (strncmp(cmd[0], "KEY", 3) == 0) {
+
+      /* verify our syntax */
+      if (tok_cnt != 2) {
+        sprintf(err_str, "\'KEY\' definition requires 1 value. (%d given)", tok_cnt-1);
+        parse_err(err_str);
+        return(0);
+      }
+
+      /* check it is a known KEY */
+      if ((k = find_key(cmd[0])) == 0) {
+        sprintf(err_str, "Unknown KEY value (%s)", cmd[0]);
+        parse_err(err_str);
+        return(0);
+      }
+
+      /* test for I/O Expander definition */
+      if (strncmp(cmd[1], "XIO", 3) == 0) {
+        if (sscanf(cmd[1], "%[^:]:%i", xname, &gpio) == 2) {
+          //printf("%d XIO event %s at (%s):%d\n", lnno, name, xname, gpio);
+          if( (n = find_xio(xname)) >= 0 ){
+            k = find_key(cmd[0]);
+            if(k){
+              add_event(&xio_dev[n].key[gpio], gpio, key_names[k].code, -1);
+              //printf(" Added event %s on %s:%d\n", name, xname, gpio);
+            }
+          }
+          else {
+            sprintf(err_str, "Unknown expander: %s", xname);
+            parse_err(err_str);
+            return(0);
+          }
+        }
+        else {
+          sprintf(err_str, "Invalid expander definition: %s", cmd[1]);
+          parse_err(err_str);
+          return(0);
+        }
+      }
+      /* Otherwise we assume it is a direct pin definition */
+      else {
+        gpio = (int) strtol(cmd[1], &end_ptr, 10);
+        if (!*end_ptr) {
+
+          if(key_names[k].code < 0x300){
+            SP=0;
+            add_event(&gpio_key[gpio], gpio, key_names[k].code, -1);
+          }
+        }
+        else {
+          sprintf(err_str, "Unknown KEY definition (%s)", cmd[1]);
+          parse_err(err_str);
+          return(0);
+        }
+      }
+    }
+    /* expander declarations start with "XIO" */
+    else if (strncmp(cmd[0], "XIO", 3) == 0) {
+
+      /* verify our syntax */
+      if (tok_cnt != 2) {
+        sprintf(err_str, "\'XIO\' expander definition requires 1 value. (%d given)", tok_cnt-1);
+        parse_err(err_str);
+        return(0);
+      }
+
+      n=sscanf(cmd[1], "%d/%i/%s", &gpio, &caddr, xname);
+      if(n > 2){
+        //printf("%d XIO entry: %s %d %02x %s\n",lnno,name,gpio,caddr,xname);
+
+        strncpy(xio_dev[xio_count].name, cmd[0], 20);
+        xio_dev[xio_count].addr = caddr;
+        xio_dev[xio_count].last_key = NULL;
+        xio_dev[xio_count].lastvalue = 0xff;
+        for(i=0;i<8;i++){
+          xio_dev[xio_count].key[i] = NULL;
+        }
+        if( !strncmp(xname, "MCP23008", 8) ){
+          xio_dev[xio_count].type = IO_MCP23008;
+          xio_dev[xio_count].regno = 0x09;
+        }
+        else if( !strncmp(xname, "MCP23017A", 9) ){
+          xio_dev[xio_count].type = IO_MCP23017A;
+          xio_dev[xio_count].regno = 0x09;
+        }
+        else if( !strncmp(xname, "MCP23017B", 9) ){
+          xio_dev[xio_count].type = IO_MCP23017B;
+          xio_dev[xio_count].regno = 0x19;
+        }
+        else{
+          xio_dev[xio_count].type = IO_UNK;
+          xio_dev[xio_count].regno = 0;
+        }
+
+        add_event(&gpio_key[gpio], gpio, 0, xio_count);
+        xio_count++;
+        xio_count %= 16;
+      }
+      else {
+        sprintf(err_str, "Invalid XIO data for %s [%s]", cmd[0], cmd[1]);
+        parse_err(err_str);
+        return(0);
+      }
+    }
+    else{
+      sprintf(err_str, "Unknown configuration item: %s", cmd[0]);
+      parse_err(err_str);
+      return(0);
+    }
+  }
+
+  close(fd);
 
   n=0;
   for(i=0; i<NUM_GPIO; i++){
@@ -208,7 +277,112 @@ int init_config(void)
   printf("Found %d I/O expander(s).\n", xio_count);
   printf("Ready.\n");
 
-  return 0;
+  return(xio_count?2:1);
+}
+
+static int load_buffer(int fd) {
+
+  if (!parse_buf) {
+    parse_buf = (char *) malloc(BUFSIZ+1);
+  }
+  memset( (char *) parse_buf, 0, BUFSIZ+1);
+  parse_bufptr = parse_buf;
+
+  return(read(fd, parse_buf, BUFSIZ));
+}
+
+static char *next_token(int fd) {
+
+  const char whitespace[] = " \t\r#\0";
+  char *tok = (char *) 0;
+
+  /* chew though white space and comments to next token */
+  while ((*parse_bufptr) &&
+         (strchr(whitespace, (int) *parse_bufptr) != NULL)) {
+
+    /* comments run until CR */
+    if (*parse_bufptr == '#') {
+      while ((*parse_bufptr) && (*parse_bufptr != '\n')) {
+        parse_bufptr++;
+        if (*parse_bufptr == (char) 0) {
+          load_buffer(fd);
+        }
+      }
+    }
+    else {
+      parse_bufptr++;
+      if (*parse_bufptr == (char) 0) {
+        load_buffer(fd);
+      }
+    }
+  }
+
+  /* was this an empty line */
+  if (*parse_bufptr == '\n') {
+    tok = strdup("\n");
+    parse_bufptr++;
+    parse_lnno++;
+  }
+  else {
+
+    /* gobble up the token */
+    while ((*parse_bufptr) &&
+           (strchr(whitespace, (int) *parse_bufptr) == NULL) &&
+           (*parse_bufptr != '\n')) {
+
+      if (tok == (char *) 0) {
+        tok = (char *) malloc(2);
+        memset( (void *) tok, 0, 2);
+        *tok = *parse_bufptr;
+      }
+    else {
+        tok = (char *) realloc( (void *) tok, strlen(tok)+2);
+        tok[strlen(tok)+1] = 0;
+        tok[strlen(tok)] = *parse_bufptr;
+      }
+      parse_bufptr++;
+      if (*parse_bufptr == (char) 0) {
+        load_buffer(fd);
+      }
+    }
+  }
+
+  return(tok);
+}
+
+static int next_command(int fd, char ***cmd) {
+
+  char *tok;
+  int cnt = -1;
+
+  *cmd = (char **) 0;
+  while ((tok = next_token(fd)) && (*tok != '\n')) {
+
+    if (!*cmd) {
+      *cmd = (char **) calloc(1, sizeof(char *));
+      (*cmd)[0] = tok;
+      cnt = 1;
+    }
+    else {
+      cnt++;
+      *cmd = (char **) realloc((void *) *cmd, sizeof(char *)*cnt);
+      (*cmd)[cnt-1] = tok;
+    }
+  }
+
+  /* check if this is just a blank line */
+  if ((cnt == -1) && tok) {
+    cnt = 0;
+  }
+
+  return(cnt);
+}
+
+static void parse_err(char *str) {
+
+  printf("ERROR: %s line %d: %s\n", parse_filename, parse_lnno, str);
+
+  return;
 }
 
 static int find_xio(const char *name)
@@ -525,5 +699,4 @@ void last_iic_key(keyinfo_s *kp)
   kp->key = KI.key;
   kp->val = KI.val;
 }
-
 
