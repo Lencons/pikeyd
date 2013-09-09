@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include "joy_RPi.h"
 #include "iic.h"
+#include "debug.h"
 
 static void showHelp(void);
 static void showVersion(void);
@@ -38,24 +39,47 @@ int main(int argc, char *argv[])
   int i;
 
   for(i=1; i<argc; i++){
-    if(!strcmp(argv[i], "-d")){
+    if (!strcmp(argv[i], "-d")) {
       en_daemonize = 1;
       //daemonize("/tmp", "/tmp/pikeyd.pid");
     }
-    if(!strcmp(argv[i], "-k")){
+    else if (!strcmp(argv[i], "-k")) {
       daemonKill("/tmp/pikeyd.pid");
       exit(0);
     }
-    if(!strcmp(argv[i], "-r")){
+    else if (!strcmp(argv[i], "-r")) {
       joy_enable_repeat();
     }
-    if(!strcmp(argv[i], "-v")){
+    else if (!strcmp(argv[i], "-v")) {
       showVersion();
       exit(0);
     }
-    if(!strcmp(argv[i], "-h")){
+    else if (!strcmp(argv[i], "-h")) {
       showHelp();
       exit(0);
+    }
+    /* debug options */
+    else if (!strncmp(argv[i], "-D", 2)) {
+      int d = 1;
+      char *p = &argv[i][2];
+
+      if (argv[i][2]) {
+        d = strtol(&argv[i][2], &p, 10);
+        if (d > 10) {
+          d = 10;
+        }
+      }
+      if (*p) {
+        printf("Unknown -D option: %s\n", argv[i]);
+        exit(-1);
+      }
+      debug_init(d);
+      printf("DEBUG LEVEL %d\n", d);
+    }
+    else {
+      printf("Unknown command line argument: %s\n", argv[i]);
+      showHelp();
+      exit(-1);
     }
   }
 
@@ -72,17 +96,17 @@ int main(int argc, char *argv[])
       init_iic();
   }
 
+  printf("Ready.\n");
 
   //test_config(); exit(0);
 
   //test_iic(0x20);  close_iic();  exit(0);
 
-  //printf("init uinput\n");
+  //joy_RPi_init(); exit(0);
 
   if(init_uinput() == 0){
     sleep(1);
-    //test_uinput();
-    if(joy_RPi_init()>=0){
+    if (gpio_init()) {
 
       if(!en_daemonize){
 	printf("Press ^C to exit.\n");
@@ -107,6 +131,7 @@ static void showHelp(void)
   printf("Usage: pikeyd [option]\n");
   printf("Options:\n");
   printf("  -d    run as daemon\n");
+  printf("  -D?   debug level (-D1 to -D10)\n");
   printf("  -r    force key repeats\n");
   printf("  -k    try to terminate running daemon\n");
   printf("  -v    version\n");

@@ -38,6 +38,8 @@ typedef struct{
   int val;
 }keyinfo_s;
 
+#define MAX_MAT_GRPS  8
+
 int init_config(void);
 void test_config(void);
 int get_event_key(int gpio, int idx);

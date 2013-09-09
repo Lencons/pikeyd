@@ -26,11 +26,13 @@
 #ifndef _JOY_RPI_H_
 #define _JOY_RPI_H_
 
-#define RPI_JOYSTICK
+#define GPIO_NUM	32
+#define GPIO_IN		'I'
+#define GPIO_OUT        'O'
 
-int joy_RPi_init(void);
+int gpio_init(void);
+int gpio_pincfg(int pin, char flg);
 void joy_RPi_poll(void);
-void joy_RPi_exit(void);
 void joy_handle_event(void);
 void joy_enable_repeat(void);
 
