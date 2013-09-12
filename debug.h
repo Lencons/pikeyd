@@ -29,6 +29,10 @@
 #define DEBUG_INFO 1
 #define DEBUG_GPIO 2
 #define DEBUG_DEV1 5
+#define DEBUG_DEV2 6
+#define DEBUG_DEV3 7
+#define DEBUG_DEV4 8
+#define DEBUG_DEV5 9
 #define DEBUG_ALL 10
 
 extern int db_lvl;

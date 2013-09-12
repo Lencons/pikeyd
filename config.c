@@ -34,10 +34,9 @@
 
 #include "config.h"
 #include "iic.h"
-#include "joy_RPi.h"
+#include "gpio.h"
 #include "debug.h"
 
-#define NUM_GPIO 32
 #define NUM_P1_PINS 26
 #define NUM_P5_PINS 8
 #define MAX_LN 128
@@ -45,14 +44,6 @@
 #define MAX_XIO_PINS 8
 
 extern key_names_s key_names[];
-
-typedef struct _gpio_key{
-  int gpio;
-  int idx;
-  int key;
-  int xio; /* -1 for direct gpio */
-  struct _gpio_key *next;
-}gpio_key_s;
 
 /* each I/O expander can have 8 pins */
 typedef struct{
@@ -66,43 +57,40 @@ typedef struct{
   gpio_key_s *key[8];
 }xio_dev_s;
 
-/* matrix groupings */
-typedef struct {
-  char *name;
-  int gpio;
-  int joy_idx;
-} mat_grp_s;
+int load_buffer(int fd);
+char *next_token(int fd);
+int next_command(int fd, char ***cmd);
+void parse_err(char *str);
+void test_config(void);
+int get_gpio_pin(char *pin_str);
+int find_key(const char *name);
+void add_event(gpio_key_s **ev, int gpio, int key, int xio);
+gpio_key_s *get_event(gpio_key_s *ev, int idx);
+int find_xio(const char *name);
+void setup_xio(int xio);
+int find_mat(char *name);
 
-static int load_buffer(int fd);
-static char *next_token(int fd);
-static int next_command(int fd, char ***cmd);
-static void parse_err(char *str);
-static int get_gpio_pin(char *pin_str);
-static int find_key(const char *name);
-static void add_event(gpio_key_s **ev, int gpio, int key, int xio);
-static gpio_key_s *get_event(gpio_key_s *ev, int idx);
-static int find_xio(const char *name);
-static void setup_xio(int xio);
-static int find_mat(const char *name);
-
-static gpio_key_s *gpio_key[NUM_GPIO];
-static gpio_key_s *last_gpio_key = NULL;
 static int gpios[NUM_GPIO];
-static int num_gpios_used=0;
 static xio_dev_s xio_dev[MAX_XIO_DEVS];
 static int xio_count = 0;
 
-static mat_grp_s mat_grp[MAX_MAT_GRPS];
-static int mat_count = 0;
+static mat_grp_s *mat_grp;
+static int mat_cnt = 0;
 
 static int SP;
 static keyinfo_s KI;
 
+/* config file parsing variables */
 static char *parse_buf = (char *) 0;
 static char *parse_bufptr = (char *) 0;
 static char parse_filename[80];
 static int parse_lnno = 0;
 
+
+/* init_config() should be called once to read configuration from file.
+ * The GPIO will also be configured as part of this process and should
+ * already be initalised.
+ */
 int init_config(void) {
 
   int i, j, k, n;
@@ -114,9 +102,11 @@ int init_config(void) {
   int gpio, caddr, regno;
   char err_str[80];
 
-  for(i=0;i<NUM_GPIO;i++){
-    gpio_key[i] = NULL;
-  }
+  /* initalise default matrix group for direct I/O */
+  mat_grp = (mat_grp_s *) malloc(sizeof(mat_grp_s));
+  memset((void *) mat_grp, 0, sizeof(mat_grp_s));
+  mat_cnt = 0;
+  mat_grp[0].gpio = -1;
 
   /* search for conf file: ./pikeyd.conf, ~/.pikeyd.conf, /etc/pikeyd.conf */
   strcpy(parse_filename, "./pikeyd.conf");
@@ -169,7 +159,7 @@ int init_config(void) {
             k = find_key(cmd[0]);
             if(k){
               add_event(&xio_dev[n].key[gpio], gpio, key_names[k].code, -1);
-              if (debug_on() >= DEBUG_DEV1) {
+              if (debug_lvl() >= DEBUG_DEV1) {
                 printf(" Added event %s on %s:%d\n", key_names[k].code, xname, gpio);
               }
             }
@@ -190,13 +180,21 @@ int init_config(void) {
       /* test for MATRIX Pin definition */
       else if (!strncmp(cmd[1], "MATRIX", 6)) {
         char pin_str[32];
+        int grp_id;
 
         if (sscanf(cmd[1], "%[^:]:%s", xname, pin_str) == 2) {
+
+          grp_id = find_mat(xname);
+          if (grp_id == -1) {
+            sprintf(err_str, "Matrix group not defined (%s)", xname);
+            parse_err(err_str);
+            return(0);
+          }
+
           gpio = get_gpio_pin(pin_str);
           if (gpio >= 0) {
-            if (!gpio_pincfg(gpio, GPIO_IN)) {
-              return(0);
-            }
+            gpio_pincfg(gpio, GPIO_IN, &mat_grp[grp_id].gpio_mask);
+            add_event(&(mat_grp[grp_id].gpio_key[gpio]), gpio, key_names[k].code, -1);
           }
           else {
             sprintf(err_str, "Invalid GPIO PIN reference (%s)", pin_str);
@@ -217,10 +215,10 @@ int init_config(void) {
 
           if(key_names[k].code < 0x300){
             SP=0;
-            if (!gpio_pincfg(gpio, GPIO_IN)) {
+            if (!gpio_pincfg(gpio, GPIO_IN, &mat_grp[0].gpio_mask)) {
               return(0);
             }
-            add_event(&gpio_key[gpio], gpio, key_names[k].code, -1);
+            add_event(&(mat_grp[0].gpio_key[gpio]), gpio, key_names[k].code, -1);
           }
         }
         else {
@@ -230,6 +228,7 @@ int init_config(void) {
         }
       }
     }
+
     /* expander declarations start with "XIO" */
     else if (strncmp(cmd[0], "XIO", 3) == 0) {
 
@@ -275,7 +274,7 @@ int init_config(void) {
           xio_dev[xio_count].regno = 0;
         }
 
-        add_event(&gpio_key[gpio], gpio, 0, xio_count);
+        add_event(&(mat_grp[0].gpio_key[gpio]), gpio, 0, xio_count);
         xio_count++;
         xio_count %= MAX_XIO_DEVS;
       }
@@ -285,21 +284,13 @@ int init_config(void) {
         return(0);
       }
     }
+
     /* Matrix group definitions begin with MATRIX */
     else if (strncmp(cmd[0], "MATRIX", 6) == 0) {
 
       /* check this isn't a duplicate entry */
       if (find_mat(cmd[0]) != -1) {
         sprintf(err_str, "Duplicate \'MATIX\' group definition: %s", cmd[0]);
-        parse_err(err_str);
-        return(0);
-      }
-
-      /* make sure we haven't exceeded our MAX Group Definitions */
-      if (mat_count == MAX_MAT_GRPS) {
-        sprintf(err_str, "The maximum number of Matrix Groups has been exceeded (%d groups)", MAX_MAT_GRPS);
-        parse_err(err_str);
-        sprintf(err_str, "Matrix Group \'%s\' cannot be defined", cmd[0]);
         parse_err(err_str);
         return(0);
       }
@@ -313,10 +304,51 @@ int init_config(void) {
 
       gpio = get_gpio_pin(cmd[1]);
       if (gpio >= 0) {
-        mat_grp[mat_count].name = strdup(cmd[0]);
-        mat_grp[mat_count].gpio = gpio;
-        mat_grp[mat_count].joy_idx = mat_count;
-        mat_count++;
+        mat_cnt++;
+        mat_grp = (mat_grp_s *) realloc((void *) mat_grp, sizeof(mat_grp_s) * (mat_cnt + 1));
+        memset((void *) &mat_grp[mat_cnt], 0, sizeof(mat_grp_s));
+        mat_grp[mat_cnt].name = strdup(cmd[0]);
+        mat_grp[mat_cnt].gpio = gpio;
+
+        if (!gpio_pincfg(gpio, GPIO_OUT, (int *) 0)) {
+          sprintf(err_str, "Matrix driver GPIO%02d already configured.", gpio);
+          parse_err(err_str);
+          return(0);
+        }
+      }
+      else {
+        sprintf(err_str, "Invalid GPIO PIN reference (%s)", cmd[1]);
+        parse_err(err_str);
+        return(0);
+      }
+    }
+
+    /* Internal Pull Resistor configuration */
+    else if (strncmp(cmd[0], "PULL", 4) == 0) {
+      int mode;
+
+      if (!strcmp(cmd[0], "PULL_DOWN")) {
+        mode = PUD_DOWN;
+      }
+      else if (!strcmp(cmd[0], "PULL_UP")) {
+        mode = PUD_UP;
+      }
+      else if (!strcmp(cmd[0], "PULL_FLOAT")) {
+        mode = PUD_OFF;
+      }
+      else {
+        sprintf(err_str, "Invalid PULL command (%s)", cmd[0]);
+        parse_err(err_str);
+        return(0);
+      }
+
+      gpio = get_gpio_pin(cmd[1]);
+      if (gpio >= 0) {
+        if (!gpio_pull(gpio, mode)) {
+          sprintf(err_str, "GPIO%02d pull resister not set, pin no set for input.", gpio);
+          parse_err(err_str);
+          return(0);
+        }
       }
       else {
         sprintf(err_str, "Invalid GPIO PIN reference (%s)", cmd[1]);
@@ -341,12 +373,11 @@ int init_config(void) {
 
   n=0;
   for(i=0; i<NUM_GPIO; i++){
-    if(gpio_key[i]){
-      gpios[n] = gpio_key[i]->gpio;
+    if(mat_grp[0].gpio_key[i]){
+      gpios[n] = mat_grp[0].gpio_key[i]->gpio;
       n++;
     }
   }
-  num_gpios_used = n;
 
   for(j=0;j<xio_count;j++){
     for(i=0;i<8;i++){
@@ -362,24 +393,17 @@ int init_config(void) {
     test_config();
   }
 
-  {
-    int ret = 1;
-
-    if (xio_count) {
-      printf("Found %d I/O expander(s).\n", xio_count);
-      ret = 2;
-    }
-    if (mat_count) {
-      printf("Found %d matrix group(s).\n", mat_count);
-      ret = 3;
-    }
-
-    printf("Polling %d GPIO pin(s).\n", num_gpios_used);
-    return(ret);
+  if (xio_count) {
+    return(2);
   }
+  if (mat_cnt) {
+    return(3);
+  }
+
+  return(1);
 }
 
-static int load_buffer(int fd) {
+int load_buffer(int fd) {
 
   if (!parse_buf) {
     parse_buf = (char *) malloc(BUFSIZ+1);
@@ -390,7 +414,7 @@ static int load_buffer(int fd) {
   return(read(fd, parse_buf, BUFSIZ));
 }
 
-static char *next_token(int fd) {
+char *next_token(int fd) {
 
   const char whitespace[] = " \t\r#\0";
   char *tok = (char *) 0;
@@ -449,7 +473,7 @@ static char *next_token(int fd) {
   return(tok);
 }
 
-static int next_command(int fd, char ***cmd) {
+int next_command(int fd, char ***cmd) {
 
   char *tok;
   int cnt = -1;
@@ -477,14 +501,14 @@ static int next_command(int fd, char ***cmd) {
   return(cnt);
 }
 
-static void parse_err(char *str) {
+void parse_err(char *str) {
 
   printf("ERROR: %s line %d: %s\n", parse_filename, parse_lnno, str);
 
   return;
 }
 
-static int get_gpio_pin(char *pin_str) {
+int get_gpio_pin(char *pin_str) {
 
   static p1_ref[NUM_P1_PINS] = {-1,-1,2,-1,3,-1,4,14,-1,15,17,18,27,
                                 -1,22,23,-1,24,10,-1,9,25,11,8,-1,7};
@@ -530,7 +554,7 @@ static int get_gpio_pin(char *pin_str) {
   return(pin);
 }
 
-static int find_key(const char *name)
+int find_key(const char *name)
 {
   int i=0;
   while(key_names[i].code >= 0){
@@ -543,7 +567,7 @@ static int find_key(const char *name)
   return i;
 }
 
-static void add_event(gpio_key_s **ev, int gpio, int key, int xio)
+void add_event(gpio_key_s **ev, int gpio, int key, int xio)
 {
   if(*ev){
     SP++;
@@ -565,7 +589,7 @@ static void add_event(gpio_key_s **ev, int gpio, int key, int xio)
   }
 }
 
-static gpio_key_s *get_event(gpio_key_s *ev, int idx)
+gpio_key_s *get_event(gpio_key_s *ev, int idx)
 {
   if(ev->idx == idx){
     return ev;
@@ -581,7 +605,7 @@ static gpio_key_s *get_event(gpio_key_s *ev, int idx)
 int get_event_key(int gpio, int idx)
 {
   gpio_key_s *ev;
-  ev = get_event(gpio_key[gpio], idx);
+  ev = get_event(mat_grp[0].gpio_key[gpio], idx);
   if(ev){
     return ev->key;
   }
@@ -590,12 +614,12 @@ int get_event_key(int gpio, int idx)
   }
 }
 
-int got_more_keys(int gpio)
+int got_more_keys(int grp, int gpio)
 {
-  if( last_gpio_key == NULL ){
-    return (gpio_key[gpio] != NULL);
+  if( mat_grp[grp].last_gpio_key == NULL ){
+    return (mat_grp[grp].gpio_key[gpio] != NULL);
   }
-  else if( last_gpio_key->next == NULL){
+  else if( mat_grp[grp].last_gpio_key->next == NULL){
     return 0;
   }
   else{
@@ -603,38 +627,38 @@ int got_more_keys(int gpio)
   }
 }
 
-void restart_keys(void)
+void restart_keys(int grp)
 {
-    last_gpio_key = NULL;
+    mat_grp[grp].last_gpio_key = NULL;
 }
 
-int get_curr_key(void)
+int get_curr_key(int grp)
 {
   int r=0;
-  if(last_gpio_key){
-    r=last_gpio_key->key;
+  if(mat_grp[grp].last_gpio_key){
+    r=mat_grp[grp].last_gpio_key->key;
   }
   return r;
 }
 
-int get_next_key(int gpio)
+int get_next_key(int grp, int gpio)
 {
   static int lastgpio=-1;
   static int idx = 0;
   gpio_key_s *ev;
   int k;
 
-  ev = last_gpio_key;
+  ev = mat_grp[grp].last_gpio_key;
   if( (ev == NULL) || (gpio != lastgpio) ){
     /* restart at the beginning after reaching the end, or reading a new gpio */
-    ev = gpio_key[gpio];
+    ev = mat_grp[grp].gpio_key[gpio];
     lastgpio = gpio;
   }
   else{
     /* get successive events while retrieving the same gpio */
-    ev = last_gpio_key->next;
+    ev = mat_grp[grp].last_gpio_key->next;
   }
-  last_gpio_key = ev;
+  mat_grp[grp].last_gpio_key = ev;
 
   if(ev){
     k = ev->key;
@@ -648,53 +672,76 @@ int get_next_key(int gpio)
 void test_config(void)
 {
   int i, j, k;
+  int grp;
   char str[30];
 
   printf("** Configuration Dump\n**\n");
 
-  printf("** Direct Button Configuration:\n");
-  printf("**\tGPIO: ");
-  j = 0;
-  for (i=0; i<NUM_GPIO; i++) {
-    if(gpio_key[i]){
-      printf("%s%02d", j?", ":"", i);
-      j++;
-      if(j && !(j%15)) {
-        printf("\n**\t      ");
-        j = 0;
+  if (mat_grp[0].gpio_mask) {
+    printf("** Direct Button Configuration:\n");
+    printf("**\tGPIO: ");
+    j = 0;
+    for (i=0; i<NUM_GPIO; i++) {
+      if(mat_grp[0].gpio_key[i]){
+        printf("%s%02d", j?", ":"", i);
+        j++;
+        if(j && !(j%15)) {
+          printf("\n**\t      ");
+          j = 0;
+        }
       }
     }
-  }
-  printf("\n**\n");
+    printf("\n**\n");
 
-  printf("** GPIO Key Assignments:\n");
-  for (i=0; i<NUM_GPIO; i++) {
-    j = 0;
-    restart_keys();
-    sprintf(str, "**  GPIO%02d: ", i);
-    while( got_more_keys(i) ){
-      int x;
+    printf("** GPIO Key Assignments:\n");
+    for (i=0; i<NUM_GPIO; i++) {
+      j = 0;
+      restart_keys(0);
+      sprintf(str, "**  GPIO%02d: ", i);
+      while (got_more_keys(0, i)) {
+        int x;
 
-      k = get_next_key(i);
-      for (x=0; (key_names[x].code != -1) && (key_names[x].code != k); x++);
-      printf("%s<%s>", j?", ":str, &key_names[x].name[4]);
-      j++;
+        k = get_next_key(0, i);
+        for (x=0; (key_names[x].code != -1) && (key_names[x].code != k); x++);
+        printf("%s<%s>", (j?", ":str), &key_names[x].name[4]);
+        j++;
+      }
+      if (j) {
+        printf("\n");
+      }
     }
-    if (j) {
-      printf("\n");
-    }
+    printf("**\n");
   }
-  printf("**\n");
+
+  if (mat_cnt) {
+    printf("** Matrix Groups:\n");
+    for (grp=1; grp <= mat_cnt; grp++) {
+      for (i=0; i<NUM_GPIO; i++) {
+        j = 0;
+        restart_keys(grp);
+        sprintf(str, "**  %s(GPIO%02d): ", mat_grp[grp].name, i);
+        while (got_more_keys(grp, i)) {
+          int x;
+
+          k = get_next_key(grp, i);
+          for (x=0; (key_names[x].code != -1) && (key_names[x].code != k); x++);
+          printf("%s<%s>", j?", ":str, &key_names[x].name[4]);
+          j++;
+        }
+        if (j) {
+          printf("\n");
+        }
+      }
+    }
+    printf("**\n");
+  }
+
+  return;
 }
 
 /**
  ** GPIO Management Routines
  **/
-
-int gpios_used(void)
-{
-  return num_gpios_used;
-}
 
 int gpio_pin(int n)
 {
@@ -705,7 +752,7 @@ int gpio_pin(int n)
  ** External I/O Management Routines
  **/
 
-static int find_xio(const char *name)
+int find_xio(const char *name)
 {
   int i=0;
   while(i<xio_count){
@@ -721,13 +768,13 @@ static int find_xio(const char *name)
 int is_xio(int gpio)
 {
   int r=0;
-  if( gpio_key[gpio] && (gpio_key[gpio]->xio >= 0) ){
+  if( mat_grp[0].gpio_key[gpio] && (mat_grp[0].gpio_key[gpio]->xio >= 0) ){
     r=1;
   }
   return r;
 }
 
-static void setup_xio(int xio)
+void setup_xio(int xio)
 {
   char cfg_dat[]={
     0xff, //IODIR
@@ -772,8 +819,8 @@ int get_curr_xio_no(void)
 {
   int n;
   int r = -1;
-  if(last_gpio_key){
-    n=last_gpio_key->xio;
+  if(mat_grp[0].last_gpio_key){
+    n=mat_grp[0].last_gpio_key->xio;
     if(n>=0){
       r = n;
     }
@@ -878,15 +925,26 @@ void last_iic_key(keyinfo_s *kp)
  ** Matrix Grgoups Management Routines
  **/
 
-static int find_mat(const char *name) {
+int find_mat(char *name) {
 
-  int i;
+  int i = -1;
 
-  for (i=0; (i < mat_count) && strcmp(mat_grp[i].name, name); i++);
-  if (i == mat_count) {
-    i = -1;
+  if (mat_cnt) {
+    for (i=1; (i <= mat_cnt) && strcmp(mat_grp[i].name, name); i++);
+    if (i > mat_cnt) {
+      i = -1;
+    }
   }
 
   return(i);
+}
+
+mat_grp_s *get_matgrp(int grp) {
+
+  return(&mat_grp[grp]);
+}
+
+int mat_count(void) {
+  return(mat_cnt);
 }
 

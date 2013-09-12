@@ -26,12 +26,12 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "joy_RPi.h"
+#include "gpio.h"
 #include "iic.h"
 #include "debug.h"
 
-static void showHelp(void);
-static void showVersion(void);
+void showHelp(void);
+void showVersion(void);
 
 int main(int argc, char *argv[])
 {
@@ -48,7 +48,9 @@ int main(int argc, char *argv[])
       exit(0);
     }
     else if (!strcmp(argv[i], "-r")) {
-      joy_enable_repeat();
+      /* TODO: repeat broken with addition of matrix groups */
+      printf("Key repeat currently disabled.\n");
+      //joy_enable_repeat();
     }
     else if (!strcmp(argv[i], "-v")) {
       showVersion();
@@ -87,6 +89,10 @@ int main(int argc, char *argv[])
     daemonize("/tmp", "/tmp/pikeyd.pid");
   }
 
+  if (!gpio_init()) {
+    return(-1);
+  }
+
   switch (init_config()) {
     case 0:
       return(-1);
@@ -98,35 +104,27 @@ int main(int argc, char *argv[])
 
   printf("Ready.\n");
 
-  //test_config(); exit(0);
-
   //test_iic(0x20);  close_iic();  exit(0);
 
-  //joy_RPi_init(); exit(0);
-
-  if(init_uinput() == 0){
+  if(!init_uinput()){
     sleep(1);
-    if (gpio_init()) {
 
-      if(!en_daemonize){
-	printf("Press ^C to exit.\n");
-      }
-
-      for(;;){
-	joy_RPi_poll();
-	usleep(4000);
-      }
-
-      joy_RPi_exit();
+    if(!en_daemonize){
+      printf("Press ^C to exit.\n");
     }
 
-    close_uinput();
+    while (1) {
+      for (i=0; i<=mat_count(); i++) {
+        gpio_poll(i);
+      }
+      usleep(4000);
+    }
   }
 
   return 0;
 }
 
-static void showHelp(void)
+void showHelp(void)
 {
   printf("Usage: pikeyd [option]\n");
   printf("Options:\n");
@@ -138,11 +136,10 @@ static void showHelp(void)
   printf("  -h    this help\n");
 }
 
-static void showVersion(void)
+void showVersion(void)
 {
   printf("pikeyd 1.3 (May 2013)\n");
   printf("The Universal Raspberry Pi GPIO keyboard daemon.\n");
-  printf("Copyright (C) 2013 Michael Moller.\n");
   printf("This is free software; see the source for copying conditions.  There is NO\n");
   printf("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
 }

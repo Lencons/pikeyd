@@ -122,7 +122,7 @@ int test_uinput(void)
       break;
     }
 
-    k = send_gpio_keys(21, 1);
+    k = send_gpio_keys(0, 21, 1);
     sendKey(k, 0);
 
     for(i = 0; i < 20; i++) {
@@ -198,13 +198,13 @@ static int sendSync(void)
   return 0;
 }
 
-int send_gpio_keys(int gpio, int value)
+int send_gpio_keys(int grp, int gpio, int value)
 {
   int k;
   int xio;
-  restart_keys();
-  while( got_more_keys(gpio) ){
-    k = get_next_key(gpio);
+  restart_keys(grp);
+  while( got_more_keys(grp, gpio) ){
+    k = get_next_key(grp, gpio);
     if(is_xio(gpio) && value){ /* xio int-pin is active low */
       xio = get_curr_xio_no();
       poll_iic(xio);
@@ -212,7 +212,7 @@ int send_gpio_keys(int gpio, int value)
     }
     else if(k<0x300){
       sendKey(k, value);
-      if(value && got_more_keys(gpio)){
+      if(value && got_more_keys(grp, gpio)){
 	/* release the current key, so the next one can be pressed */
 	sendKey(k, 0);
       }

@@ -26,7 +26,7 @@
 #include <stdio.h>
 #include "debug.h"
 
-int db_lvl = 1;
+int db_lvl = 0;
 
 void debug_init(int lvl) {
 
