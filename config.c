@@ -61,9 +61,11 @@ int load_buffer(int fd);
 char *next_token(int fd);
 int next_command(int fd, char ***cmd);
 void parse_err(char *str);
+int parse_pin_str(char *str, int *val[]);
 void test_config(void);
 int get_gpio_pin(char *pin_str);
 int find_key(const char *name);
+int get_pin_ref(char *str, int *gpio, int *mat_grp, int *xio);
 void add_event(gpio_key_s **ev, int gpio, int key, int xio);
 gpio_key_s *get_event(gpio_key_s *ev, int idx);
 int find_xio(const char *name);
@@ -95,6 +97,7 @@ int init_config(void) {
 
   int i, j, k, n;
   int fd;
+  int grp_id, xio;
   char *end_ptr;
   char **cmd;
   int tok_cnt;
@@ -135,7 +138,10 @@ int init_config(void) {
       continue;
     }
 
-    /* KEY declaration */
+    /**
+     ** KEY_ declaration
+     ** ===============
+     **/
     if (strncmp(cmd[0], "KEY", 3) == 0) {
 
       /* verify our syntax */
@@ -152,84 +158,83 @@ int init_config(void) {
         return(0);
       }
 
-      /* test for I/O Expander definition */
-      if (!strncmp(cmd[1], "XIO", 3)) {
-        if (sscanf(cmd[1], "%[^:]:%i", xname, &gpio) == 2) {
-          if( (n = find_xio(xname)) >= 0 ){
-            k = find_key(cmd[0]);
-            if(k){
-              add_event(&xio_dev[n].key[gpio], gpio, key_names[k].code, -1);
-              if (debug_lvl() >= DEBUG_DEV1) {
-                printf(" Added event %s on %s:%d\n", key_names[k].code, xname, gpio);
-              }
-            }
-          }
-          else {
-            sprintf(err_str, "Unknown expander: %s", xname);
-            parse_err(err_str);
-            return(0);
-          }
-        }
-        else {
+      switch(get_pin_ref(cmd[1], &gpio, &grp_id, &xio)) {
+        case 0:
+          printf("KEY Configuration - Ineternal Error\n");
+          return(0);
+        case -1:
+          sprintf(err_str, "Unknown expander: %s", cmd[1]);
+          parse_err(err_str);
+          return(0);
+        case -2:
           sprintf(err_str, "Invalid expander definition: %s", cmd[1]);
           parse_err(err_str);
           return(0);
-        }
-      }
-
-      /* test for MATRIX Pin definition */
-      else if (!strncmp(cmd[1], "MATRIX", 6)) {
-        char pin_str[32];
-        int grp_id;
-
-        if (sscanf(cmd[1], "%[^:]:%s", xname, pin_str) == 2) {
-
-          grp_id = find_mat(xname);
-          if (grp_id == -1) {
-            sprintf(err_str, "Matrix group not defined (%s)", xname);
-            parse_err(err_str);
-            return(0);
-          }
-
-          gpio = get_gpio_pin(pin_str);
-          if (gpio >= 0) {
-            gpio_pincfg(gpio, GPIO_IN, &mat_grp[grp_id].gpio_mask);
-            add_event(&(mat_grp[grp_id].gpio_key[gpio]), gpio, key_names[k].code, -1);
-          }
-          else {
-            sprintf(err_str, "Invalid GPIO PIN reference (%s)", pin_str);
-            parse_err(err_str);
-            return(0);
-          }
-        }
-        else {
-          sprintf(err_str, "Invalid Matrix definition: %s", cmd[1]);
+        case -3:
+          sprintf(err_str, "Matrix group not defined (%s)", cmd[1]);
           parse_err(err_str);
           return(0);
-        }
-      }
-      /* Otherwise we assume it is a direct pin definition */
-      else {
-        gpio = get_gpio_pin(cmd[1]);
-        if (gpio >= 0) {
-
-          if(key_names[k].code < 0x300){
-            SP=0;
-            if (!gpio_pincfg(gpio, GPIO_IN, &mat_grp[0].gpio_mask)) {
-              return(0);
-            }
-            add_event(&(mat_grp[0].gpio_key[gpio]), gpio, key_names[k].code, -1);
-          }
-        }
-        else {
+        case -4:
           sprintf(err_str, "Invalid GPIO PIN reference (%s)", cmd[1]);
           parse_err(err_str);
           return(0);
+        case -5:
+          sprintf(err_str, "Invalid Matrix definition: %s", cmd[1]);
+          parse_err(err_str);
+          return(0);
+        case -6:
+          sprintf(err_str, "Invalid GPIO PIN reference (%s)", cmd[1]);
+          parse_err(err_str);
+          return(0);
+      }
+
+      if (debug_lvl() >= DEBUG_DEV1) {
+        printf("REPEAT: %s GPIO: %d MATRIX: %d XIO: %d\n", cmd[1], gpio, grp_id, xio);
+      }
+
+      if (grp_id >= 0) {
+        switch (gpio_pincfg(gpio, GPIO_IN, &mat_grp[grp_id].gpio_mask)) {
+          case 0:
+            sprintf(err_str, "INTERNAL ERROR: gpio_pincfg()");
+            parse_err(err_str);
+            return(0);
+          case -1:
+            sprintf(err_str, "GPIO%0d already configured for output.", gpio);
+            parse_err(err_str);
+            return(0);
+        }
+        mat_grp[grp_id].last_gpio = mat_grp[grp_id].gpio_mask;
+        add_event(&(mat_grp[grp_id].gpio_key[gpio]), gpio, key_names[k].code, -1);
+      }
+      else if (xio >= 0) {
+        add_event(&xio_dev[xio].key[gpio], gpio, key_names[k].code, -1);
+        if (debug_lvl() >= DEBUG_DEV1) {
+          printf(" Added event %s on %s:%d\n", key_names[k].code, xname, gpio);
+        }
+      }
+      else {
+        if (key_names[k].code < 0x300) {
+          SP=0;
+          switch (gpio_pincfg(gpio, GPIO_IN, &mat_grp[0].gpio_mask)) {
+            case 0:
+              sprintf(err_str, "INTERNAL ERROR: gpio_pincfg()");
+              parse_err(err_str);
+              return(0);
+            case -1:
+              sprintf(err_str, "GPIO%0d already configured for output.", gpio);
+              parse_err(err_str);
+              return(0);
+          }
+          mat_grp[0].last_gpio = mat_grp[0].gpio_mask;
+          add_event(&(mat_grp[0].gpio_key[gpio]), gpio, key_names[k].code, -1);
         }
       }
     }
 
-    /* expander declarations start with "XIO" */
+    /**
+     ** XIO expander declaration
+     ** ========================
+     **/
     else if (strncmp(cmd[0], "XIO", 3) == 0) {
 
       /* verify our syntax */
@@ -285,7 +290,10 @@ int init_config(void) {
       }
     }
 
-    /* Matrix group definitions begin with MATRIX */
+    /**
+     ** MATRIX group definition
+     ** =======================
+     **/
     else if (strncmp(cmd[0], "MATRIX", 6) == 0) {
 
       /* check this isn't a duplicate entry */
@@ -310,10 +318,19 @@ int init_config(void) {
         mat_grp[mat_cnt].name = strdup(cmd[0]);
         mat_grp[mat_cnt].gpio = gpio;
 
-        if (!gpio_pincfg(gpio, GPIO_OUT, (int *) 0)) {
-          sprintf(err_str, "Matrix driver GPIO%02d already configured.", gpio);
-          parse_err(err_str);
-          return(0);
+        switch (gpio_pincfg(gpio, GPIO_OUT, (int *) 0)) {
+          case 2:
+            sprintf(err_str, "Matrix driver GPIO%02d already configured.", gpio);
+            parse_err(err_str);
+            return(0);
+          case 0:
+            sprintf(err_str, "INTERNAL ERROR: gpio_pincfg()");
+            parse_err(err_str);
+            return(0);
+          case -1:
+            sprintf(err_str, "GPIO%0d already configured for output.", gpio);
+            parse_err(err_str);
+            return(0);
         }
       }
       else {
@@ -323,9 +340,20 @@ int init_config(void) {
       }
     }
 
-    /* Internal Pull Resistor configuration */
+    /**
+     ** PULL Internal Pull Resistor configuration
+     ** ==========================================
+     **/
     else if (strncmp(cmd[0], "PULL", 4) == 0) {
+
       int mode;
+
+      /* verify our syntax */
+      if (tok_cnt != 2) {
+        sprintf(err_str, "\'PULL\' definition requires 1 value. (%d given)", tok_cnt-1);
+        parse_err(err_str);
+        return(0);
+      }
 
       if (!strcmp(cmd[0], "PULL_DOWN")) {
         mode = PUD_DOWN;
@@ -354,6 +382,76 @@ int init_config(void) {
         sprintf(err_str, "Invalid GPIO PIN reference (%s)", cmd[1]);
         parse_err(err_str);
         return(0);
+      }
+    }
+
+    /**
+     ** REPEAT management for keys
+     ** ==========================
+     **/
+    else if (strncmp(cmd[0], "REPEAT", 6) == 0) {
+
+      char *p, *q;
+
+      /* verify our syntax */
+      if (tok_cnt != 2) {
+        sprintf(err_str, "\'REPEAT\' definition requires 1 value. (%d given)", tok_cnt-1);
+        parse_err(err_str);
+        return(0);
+      }
+
+      q = cmd[1];
+      while (*q) {
+        p = q;
+        for (; *q && (*q != ','); q++);
+        if (*q) {
+          *q = (char) 0;
+          q++;
+        }
+
+        switch(get_pin_ref(p, &gpio, &grp_id, &xio)) {
+          case 0:
+            printf("REPEAT Configuration - Ineternal Error\n");
+            return(0);
+          case -1:
+            sprintf(err_str, "Unknown expander: %s", p);
+            parse_err(err_str);
+            return(0);
+          case -2:
+            sprintf(err_str, "Invalid expander definition: %s", p);
+            parse_err(err_str);
+            return(0);
+          case -3:
+            sprintf(err_str, "Matrix group not defined (%s)", p);
+            parse_err(err_str);
+            return(0);
+          case -4:
+            sprintf(err_str, "Invalid GPIO PIN reference (%s)", p);
+            parse_err(err_str);
+            return(0);
+          case -5:
+            sprintf(err_str, "Invalid Matrix definition: %s", p);
+            parse_err(err_str);
+            return(0);
+          case -6:
+            sprintf(err_str, "Invalid GPIO PIN reference (%s)", p);
+            parse_err(err_str);
+            return(0);
+        }
+
+        if (debug_lvl() >= DEBUG_DEV1) {
+          printf("REPEAT: %s GPIO: %d MATRIX: %d XIO: %d\n", p, gpio, grp_id, xio);
+        }
+
+        if (grp_id) {
+          mat_grp[grp_id].rpt_flg |= (1<<gpio);
+        }
+        else if (xio >= 0) {
+          printf("Repeat not imlemented for XIO.\n");
+        }
+        else {
+          mat_grp[0].rpt_flg |= (1<<gpio);
+        }
       }
     }
     else {
@@ -508,6 +606,7 @@ void parse_err(char *str) {
   return;
 }
 
+
 int get_gpio_pin(char *pin_str) {
 
   static p1_ref[NUM_P1_PINS] = {-1,-1,2,-1,3,-1,4,14,-1,15,17,18,27,
@@ -566,6 +665,66 @@ int find_key(const char *name)
   }
   return i;
 }
+
+
+int get_pin_ref(char *str, int *gpio, int *mat_grp, int *xio) {
+
+  int n;
+  char s[80];
+
+  *gpio = -1;
+  *mat_grp = -1;
+  *xio = -1;
+
+  /* test for I/O Expander definition */
+  if (!strncmp(str, "XIO", 3)) {
+    if (sscanf(str, "%[^:]:%i", s, gpio) == 2) {
+      if( (*xio = find_xio(s)) < 0 ){
+        /* Unknown expander */
+        return(-1);
+      }
+    }
+    else {
+      /* Invalid expander definition */
+      return(-2);
+    }
+  }
+
+  /* test for MATRIX Pin definition */
+  else if (!strncmp(str, "MATRIX", 6)) {
+    char mat_str[80];
+
+    if (sscanf(str, "%[^:]:%s", mat_str, s) == 2) {
+
+      *mat_grp = find_mat(mat_str);
+      if (*mat_grp == -1) {
+        /* Matrix group not defined */
+        return(-3);
+      }
+
+      *gpio = get_gpio_pin(s);
+      if (*gpio < 0) {
+        /* Invalid GPIO PIN reference */
+        return(-4);
+      }
+    }
+    else {
+      /* Invalid Matrix definition */
+      return(-5);
+    }
+  }
+  /* Otherwise we assume it is a direct pin definition */
+  else {
+    *gpio = get_gpio_pin(str);
+    if (gpio < 0) {
+      /* Invalid GPIO PIN reference */
+      return(-6);
+    }
+  }
+
+  return(1);
+}
+
 
 void add_event(gpio_key_s **ev, int gpio, int key, int xio)
 {
@@ -901,13 +1060,9 @@ void handle_iic_event(int xio, int value)
       f = xval & (1 << i); /* has the pin changed? */
       if(f){
 	//printf("(%02x) sending %d/%d: %x=%d\n", ival, xio, i, k, x);
-	sendKey(k, x); /* switch is active low */
+	sendKey(k, 1); /* switch is active low */
 	KI.key = k; KI.val = x;
-	if(x && got_more_xio_keys(xio, i)){
-	  /* release the current key, so the next one can be pressed */
-	  //printf("sending %x=%d\n", k,x);
-	  sendKey(k, 0);
-	}
+        sendKey(k, 0);
       }
     }
     //printf("Next pin\n");
@@ -915,11 +1070,6 @@ void handle_iic_event(int xio, int value)
   //printf("handler exit\n");
 }
 
-void last_iic_key(keyinfo_s *kp)
-{
-  kp->key = KI.key;
-  kp->val = KI.val;
-}
 
 /**
  ** Matrix Grgoups Management Routines

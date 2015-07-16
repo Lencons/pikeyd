@@ -48,6 +48,12 @@ typedef struct _gpio_key {
   struct _gpio_key *next;
 } gpio_key_s;
 
+typedef struct {
+  int idx;
+  unsigned t_now;
+  unsigned t_next;
+} keyrpt_s;
+
 /* matrix group */
 typedef struct {
   char *name;                     /* user defined group name, NULL for direct */
@@ -58,6 +64,10 @@ typedef struct {
   int bounce_cnt;                 /* switch bounce delay counter */
   gpio_key_s *gpio_key[NUM_GPIO];
   gpio_key_s *last_gpio_key;
+  /* key repeat variables */
+  int rpt_flg;
+  int prev_gpio;
+  keyrpt_s key_rpt[NUM_GPIO];
 } mat_grp_s;
 
 int init_config(void);
@@ -74,7 +84,6 @@ void get_xio_parm(int xio, iodev_e *type, int *addr, int *regno);
 int get_next_xio_key(int xio, int gpio);
 void restart_xio_keys(int xio);
 void handle_iic_event(int xio, int value);
-void last_iic_key(keyinfo_s *kp);
 mat_grp_s *get_matgrp(int grp);
 int mat_count(void);
 

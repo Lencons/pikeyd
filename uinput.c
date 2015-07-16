@@ -1,10 +1,11 @@
 /**** uinput.c *****************************/
-/* M. Moller   2013-01-16                  */
 /*   Universal RPi GPIO keyboard daemon    */
+/*                                         */
+/* M. Moller   2013-01-16                  */
+/* D. Lennox   2013-09-14                  */
 /*******************************************/
 
 /*
-   Copyright (C) 2013 Michael Moller.
    This file is part of the Universal Raspberry Pi GPIO keyboard daemon.
 
    This is free software; you can redistribute it and/or
@@ -32,11 +33,11 @@
 #include <linux/input.h>
 #include <linux/uinput.h>
 #include "config.h"
-#include "daemon.h"
 #include "uinput.h"
+#include "debug.h"
 
-static int sendRel(int dx, int dy);
-static int sendSync(void);
+int sendRel(int dx, int dy);
+int sendSync(void);
 
 static struct input_event     uidev_ev;
 static int uidev_fd;
@@ -47,8 +48,8 @@ static keyinfo_s lastkey;
         return(EXIT_FAILURE); \
     } while(0)
 
-int init_uinput(void)
-{
+int init_uinput(void) {
+
   int fd;
   struct uinput_user_dev uidev;
   int i;
@@ -64,13 +65,6 @@ int init_uinput(void)
   if(ioctl(fd, UI_SET_KEYBIT, BTN_LEFT) < 0)
     die("error: ioctl");
 
-  if(ioctl(fd, UI_SET_EVBIT, EV_REL) < 0)
-    die("error: ioctl");
-  if(ioctl(fd, UI_SET_RELBIT, REL_X) < 0)
-    die("error: ioctl");
-  if(ioctl(fd, UI_SET_RELBIT, REL_Y) < 0)
-    die("error: ioctl");
-
   /* don't forget to add all the keys! */
   for(i=0; i<256; i++){
     if(ioctl(fd, UI_SET_KEYBIT, i) < 0)
@@ -78,7 +72,7 @@ int init_uinput(void)
   }
 
   memset(&uidev, 0, sizeof(uidev));
-  snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "uinput-sample");
+  snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "pikeyd");
   uidev.id.bustype = BUS_USB;
   uidev.id.vendor  = 0x1;
   uidev.id.product = 0x1;
@@ -92,50 +86,9 @@ int init_uinput(void)
 
   uidev_fd = fd;
 
-  return 0;
+  return(1);
 }
 
-int test_uinput(void)
-{
-  int                    dx, dy;
-  int                    i,k;
-
-  srand(time(NULL));
-
-  while(1) {
-    switch(rand() % 4) {
-    case 0:
-      dx = -10;
-      dy = -1;
-      break;
-    case 1:
-      dx = 10;
-      dy = 1;
-      break;
-    case 2:
-      dx = -1;
-      dy = 10;
-      break;
-    case 3:
-      dx = 1;
-      dy = -10;
-      break;
-    }
-
-    k = send_gpio_keys(0, 21, 1);
-    sendKey(k, 0);
-
-    for(i = 0; i < 20; i++) {
-      //sendKey(KEY_D, 1);
-      //sendKey(KEY_D, 0);
-      sendRel(dx, dy);
-
-      usleep(15000);
-    }
-
-    sleep(10);
-  }
-}
 
 int close_uinput(void)
 {
@@ -146,8 +99,9 @@ int close_uinput(void)
 
   close(uidev_fd);
 
-  return 0;
+  return(1);
 }
+
 
 int sendKey(int key, int value)
 {
@@ -156,7 +110,11 @@ int sendKey(int key, int value)
   uidev_ev.type = EV_KEY;
   uidev_ev.code = key;
   uidev_ev.value = value;
-  //printf("sendKey: %d = %d\n", key, value);
+
+  if (debug_lvl() >= DEBUG_DEV4) {
+    printf("sendKey: %d = %d\n", key, value);
+  }
+
   if(write(uidev_fd, &uidev_ev, sizeof(struct input_event)) < 0)
     die("error: write");
 
@@ -165,7 +123,8 @@ int sendKey(int key, int value)
   return 0;
 }
 
-static int sendRel(int dx, int dy)
+
+int sendRel(int dx, int dy)
 {
   memset(&uidev_ev, 0, sizeof(struct input_event));
   uidev_ev.type = EV_REL;
@@ -186,9 +145,10 @@ static int sendRel(int dx, int dy)
   return 0;
 }
 
-static int sendSync(void)
+
+int sendSync(void)
 {
-  //memset(&uidev_ev, 0, sizeof(struct input_event));
+  memset(&uidev_ev, 0, sizeof(struct input_event));
   uidev_ev.type = EV_SYN;
   uidev_ev.code = SYN_REPORT;
   uidev_ev.value = 0;
@@ -198,33 +158,24 @@ static int sendSync(void)
   return 0;
 }
 
-int send_gpio_keys(int grp, int gpio, int value)
-{
+
+int send_gpio_keys(int grp, int gpio) {
+
   int k;
   int xio;
+
   restart_keys(grp);
   while( got_more_keys(grp, gpio) ){
     k = get_next_key(grp, gpio);
-    if(is_xio(gpio) && value){ /* xio int-pin is active low */
+    if(is_xio(gpio)){
       xio = get_curr_xio_no();
       poll_iic(xio);
-      last_iic_key(&lastkey);
     }
     else if(k<0x300){
-      sendKey(k, value);
-      if(value && got_more_keys(grp, gpio)){
-	/* release the current key, so the next one can be pressed */
-	sendKey(k, 0);
-      }
-      lastkey.key = k;
-      lastkey.val = value;
+      sendKey(k, 1);
+      sendKey(k, 0);
     }
   }
   return k;
 }
 
-void get_last_key(keyinfo_s *kp)
-{
-  kp->key = lastkey.key;
-  kp->val = lastkey.val;
-}

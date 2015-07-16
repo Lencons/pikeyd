@@ -26,6 +26,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <syslog.h>
 #include "gpio.h"
 #include "iic.h"
 #include "debug.h"
@@ -48,9 +49,7 @@ int main(int argc, char *argv[])
       exit(0);
     }
     else if (!strcmp(argv[i], "-r")) {
-      /* TODO: repeat broken with addition of matrix groups */
-      printf("Key repeat currently disabled.\n");
-      //joy_enable_repeat();
+      force_repeat();
     }
     else if (!strcmp(argv[i], "-v")) {
       showVersion();
@@ -93,6 +92,11 @@ int main(int argc, char *argv[])
     return(-1);
   }
 
+  if (!init_uinput()) {
+    return(-1);
+  }
+
+  /* config will setup GPIO, which needs to already be initialised */
   switch (init_config()) {
     case 0:
       return(-1);
@@ -102,23 +106,18 @@ int main(int argc, char *argv[])
       init_iic();
   }
 
-  printf("Ready.\n");
+  if (!en_daemonize) {
+    printf("Press ^C to exit.\n");
+  }
+  else {
+    syslog(LOG_INFO, "pikeyd daemon running.");
+  }
 
-  //test_iic(0x20);  close_iic();  exit(0);
-
-  if(!init_uinput()){
-    sleep(1);
-
-    if(!en_daemonize){
-      printf("Press ^C to exit.\n");
+  while (1) {
+    for (i=0; i<=mat_count(); i++) {
+      gpio_poll(i);
     }
-
-    while (1) {
-      for (i=0; i<=mat_count(); i++) {
-        gpio_poll(i);
-      }
-      usleep(4000);
-    }
+    usleep(4000);
   }
 
   return 0;

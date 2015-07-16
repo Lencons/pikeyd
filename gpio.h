@@ -1,10 +1,11 @@
-/**** uinput.h *****************************/
+/**** gpio.h *******************************/
+/*   Universal RPi GPIO keyboard daemon    */
+/*                                         */
 /* M. Moller   2013-01-16                  */
-/*   Universal RPi GPIO keyboard daemon      */
+/* D. Lennox   2013-09-06                  */
 /*******************************************/
 
 /*
-   Copyright (C) 2013 Michael Moller.
    This file is part of the Universal Raspberry Pi GPIO keyboard daemon.
 
    This is free software; you can redistribute it and/or
@@ -23,12 +24,24 @@
    02111-1307 USA.  
 */
 
-#ifndef _UINPUT_H_
-#define _UINPUT_H_
+#ifndef _GPIO_H_
+#define _GPIO_H_
 
-int init_uinput(void);
-int close_uinput(void);
-int send_gpio_keys(int grp, int gpio);
-int sendKey(int key, int value);
+#define GPIO_NUM	32
+#define GPIO_IN		'I'
+#define GPIO_OUT        'O'
+
+/* GPIO Pull up/down resister modes */
+#define PUD_OFF                 0       /* disable pull up/down */
+#define PUD_DOWN                1       /* enable pull down resister */
+#define PUD_UP                  2       /* enable pull up resister */
+
+int gpio_init(void);
+int gpio_pincfg(int pin, char flg, int *mask);
+int gpio_pull(int pin, int mode);
+void gpio_poll(int grp);
+void force_repeat(void);
 
 #endif
+
+
