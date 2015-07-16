@@ -92,8 +92,9 @@ void daemonKill(char *pidfile)
   }
 }
 
-void daemonize(char *rundir, char *pidfile)
-{
+
+void daemonize(char *rundir, char *pidfile) {
+
   int pid, sid, i, r;
   char str[10];
   struct sigaction newSA;
@@ -105,7 +106,7 @@ void daemonize(char *rundir, char *pidfile)
   }
 
   setlogmask(LOG_UPTO(LOG_INFO));
-  openlog(DAEMON_NAME, LOG_CONS | LOG_PERROR, LOG_USER);
+  openlog(DAEMON_NAME, LOG_CONS | LOG_PID, LOG_USER);
   syslog(LOG_INFO, "Daemon starting");
 
   sigemptyset(&newSS);
@@ -142,13 +143,9 @@ void daemonize(char *rundir, char *pidfile)
     exit(EXIT_FAILURE);
   }
 
-  for(i = getdtablesize(); i>=0; --i){
-    close(i);
-  }
-
-  close(STDIN_FILENO);
-  close(STDOUT_FILENO);
-  close(STDERR_FILENO);
+//  close(STDIN_FILENO);
+//  close(STDOUT_FILENO);
+//  close(STDERR_FILENO);
 
   if( chdir(rundir) < 0 ){
     perror(rundir);
@@ -171,5 +168,19 @@ void daemonize(char *rundir, char *pidfile)
     perror(pidfile);
   }
 
-  syslog(LOG_INFO, "Daemon running.");
+  return;
+}
+
+/* provide user with error information */
+void print_err(char *errstr) {
+
+  /* if we are running as a daemon, everything is directed to syslog */
+//  if (en_daemonize) {
+//    syslog(LOG_ERR, "%s: %s", errstr, strerror(errno));
+//  }
+//  else {
+//    perror(errstr);
+//  }
+
+  return;
 }

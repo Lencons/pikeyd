@@ -1,10 +1,10 @@
-/**** uinput.h *****************************/
-/* M. Moller   2013-01-16                  */
-/*   Universal RPi GPIO keyboard daemon      */
+/**** debug.h ******************************/
+/*   Universal RPi GPIO keyboard daemon    */
+/*                                         */
+/* D. Lennox   2013-09-06                  */
 /*******************************************/
 
 /*
-   Copyright (C) 2013 Michael Moller.
    This file is part of the Universal Raspberry Pi GPIO keyboard daemon.
 
    This is free software; you can redistribute it and/or
@@ -23,12 +23,25 @@
    02111-1307 USA.  
 */
 
-#ifndef _UINPUT_H_
-#define _UINPUT_H_
+#ifndef _DEBUG_H_
+#define _DEBUG_H_
 
-int init_uinput(void);
-int close_uinput(void);
-int send_gpio_keys(int grp, int gpio);
-int sendKey(int key, int value);
+#define DEBUG_INFO 1
+#define DEBUG_GPIO 2
+#define DEBUG_DEV1 5
+#define DEBUG_DEV2 6
+#define DEBUG_DEV3 7
+#define DEBUG_DEV4 8
+#define DEBUG_DEV5 9
+#define DEBUG_ALL 10
+
+extern int db_lvl;
+
+void debug_init(int lvl);
+int debug_lvl(void);
+int debug_on(void);
+void to_binstr(int val, char *str, int len);
+
 
 #endif
+

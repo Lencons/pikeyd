@@ -26,11 +26,13 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "joy_RPi.h"
+#include <syslog.h>
+#include "gpio.h"
 #include "iic.h"
+#include "debug.h"
 
-static void showHelp(void);
-static void showVersion(void);
+void showHelp(void);
+void showVersion(void);
 
 int main(int argc, char *argv[])
 {
@@ -38,24 +40,47 @@ int main(int argc, char *argv[])
   int i;
 
   for(i=1; i<argc; i++){
-    if(!strcmp(argv[i], "-d")){
+    if (!strcmp(argv[i], "-d")) {
       en_daemonize = 1;
       //daemonize("/tmp", "/tmp/pikeyd.pid");
     }
-    if(!strcmp(argv[i], "-k")){
+    else if (!strcmp(argv[i], "-k")) {
       daemonKill("/tmp/pikeyd.pid");
       exit(0);
     }
-    if(!strcmp(argv[i], "-r")){
-      joy_enable_repeat();
+    else if (!strcmp(argv[i], "-r")) {
+      force_repeat();
     }
-    if(!strcmp(argv[i], "-v")){
+    else if (!strcmp(argv[i], "-v")) {
       showVersion();
       exit(0);
     }
-    if(!strcmp(argv[i], "-h")){
+    else if (!strcmp(argv[i], "-h")) {
       showHelp();
       exit(0);
+    }
+    /* debug options */
+    else if (!strncmp(argv[i], "-D", 2)) {
+      int d = 1;
+      char *p = &argv[i][2];
+
+      if (argv[i][2]) {
+        d = strtol(&argv[i][2], &p, 10);
+        if (d > 10) {
+          d = 10;
+        }
+      }
+      if (*p) {
+        printf("Unknown -D option: %s\n", argv[i]);
+        exit(-1);
+      }
+      debug_init(d);
+      printf("DEBUG LEVEL %d\n", d);
+    }
+    else {
+      printf("Unknown command line argument: %s\n", argv[i]);
+      showHelp();
+      exit(-1);
     }
   }
 
@@ -63,6 +88,7 @@ int main(int argc, char *argv[])
     daemonize("/tmp", "/tmp/pikeyd.pid");
   }
 
+<<<<<<< HEAD
   switch (init_config()) {
     case 0:
       return(-1);
@@ -78,46 +104,59 @@ int main(int argc, char *argv[])
   //test_iic(0x20);  close_iic();  exit(0);
 
   //printf("init uinput\n");
+=======
+  if (!gpio_init()) {
+    return(-1);
+  }
+>>>>>>> key_matrix
 
-  if(init_uinput() == 0){
-    sleep(1);
-    //test_uinput();
-    if(joy_RPi_init()>=0){
+  if (!init_uinput()) {
+    return(-1);
+  }
 
-      if(!en_daemonize){
-	printf("Press ^C to exit.\n");
-      }
+  /* config will setup GPIO, which needs to already be initialised */
+  switch (init_config()) {
+    case 0:
+      return(-1);
+    case 1:
+      break;
+    case 2:
+      init_iic();
+  }
 
-      for(;;){
-	joy_RPi_poll();
-	usleep(4000);
-      }
+  if (!en_daemonize) {
+    printf("Press ^C to exit.\n");
+  }
+  else {
+    syslog(LOG_INFO, "pikeyd daemon running.");
+  }
 
-      joy_RPi_exit();
+  while (1) {
+    for (i=0; i<=mat_count(); i++) {
+      gpio_poll(i);
     }
-
-    close_uinput();
+    usleep(4000);
   }
 
   return 0;
 }
 
-static void showHelp(void)
+void showHelp(void)
 {
   printf("Usage: pikeyd [option]\n");
   printf("Options:\n");
   printf("  -d    run as daemon\n");
+  printf("  -D?   debug level (-D1 to -D10)\n");
   printf("  -r    force key repeats\n");
   printf("  -k    try to terminate running daemon\n");
   printf("  -v    version\n");
   printf("  -h    this help\n");
 }
 
-static void showVersion(void)
+void showVersion(void)
 {
   printf("pikeyd 1.3 (May 2013)\n");
   printf("The Universal Raspberry Pi GPIO keyboard daemon.\n");
-  printf("Copyright (C) 2013 Michael Moller.\n");
   printf("This is free software; see the source for copying conditions.  There is NO\n");
   printf("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
 }

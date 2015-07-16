@@ -28,5 +28,6 @@
 
 void daemonize(char *rundir, char *pidfile);
 void daemonKill(char *pidfile);
+void print_err(char *errstr);
 
 #endif

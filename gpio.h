@@ -1,10 +1,11 @@
-/**** joy_RPi.h ****************************/
-/* M. Moller   2013-01-16                  */
+/**** gpio.h *******************************/
 /*   Universal RPi GPIO keyboard daemon    */
+/*                                         */
+/* M. Moller   2013-01-16                  */
+/* D. Lennox   2013-09-06                  */
 /*******************************************/
 
 /*
-   Copyright (C) 2013 Michael Moller.
    This file is part of the Universal Raspberry Pi GPIO keyboard daemon.
 
    This is free software; you can redistribute it and/or
@@ -23,17 +24,23 @@
    02111-1307 USA.  
 */
 
-#ifndef _JOY_RPI_H_
-#define _JOY_RPI_H_
+#ifndef _GPIO_H_
+#define _GPIO_H_
 
-#define RPI_JOYSTICK
+#define GPIO_NUM	32
+#define GPIO_IN		'I'
+#define GPIO_OUT        'O'
 
-int joy_RPi_init(void);
-void joy_RPi_poll(void);
-void joy_RPi_exit(void);
-void joy_handle_event(void);
-void joy_enable_repeat(void);
+/* GPIO Pull up/down resister modes */
+#define PUD_OFF                 0       /* disable pull up/down */
+#define PUD_DOWN                1       /* enable pull down resister */
+#define PUD_UP                  2       /* enable pull up resister */
 
+int gpio_init(void);
+int gpio_pincfg(int pin, char flg, int *mask);
+int gpio_pull(int pin, int mode);
+void gpio_poll(int grp);
+void force_repeat(void);
 
 #endif
 
